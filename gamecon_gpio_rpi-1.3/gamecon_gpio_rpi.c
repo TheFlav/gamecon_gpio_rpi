@@ -277,9 +277,11 @@ static inline void gc_n64_send_command(struct gc_nin_gpio *ningpio)
 static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsigned char *data)
 {
 	int i,j,k;
+    int risingIndex = 0;
 	unsigned prev, mindiff=1000, maxdiff=0;
 	unsigned long flags;
 	static unsigned char samplebuf[6500]; // =max(GC_N64_BUFSIZE, GC_GCUBE_BUFSIZE)
+    static unsigned long sampletimestamp[6500];
 	
 	/* disable interrupts */
 	local_irq_save(flags);
@@ -288,7 +290,10 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 	
 	/* start sampling data */
 	for (i = 0; i < ningpio->response_bufsize; i++)
+    {
 		samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
+        sampletimestamp[i] = jiffies;
+    }
 	
 	/* enable interrupts when done */
 	local_irq_restore(flags);
@@ -311,6 +316,12 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 		
 		while (j < ningpio->response_len-1 && i < ningpio->response_bufsize-1) {
 			i++;
+            
+            /* find a rising edge */
+            if ((samplebuf[i-1] & gc_status_bit[k]) == 0 && (samplebuf[i] & gc_status_bit[k]) != 0) {
+                risingIndex = i;
+            }
+            
 			/* detect consecutive falling edges */
 			if ((samplebuf[i-1] & gc_status_bit[k]) != 0 && (samplebuf[i] & gc_status_bit[k]) == 0) {
 				/* update min&max diffs */
@@ -320,7 +331,11 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 					mindiff = i - prev;
 
 				/* data is taken between 2 falling edges */
-				data[j] |= samplebuf[prev+((i-prev)/2)] & gc_status_bit[k];
+				//data[j] |= samplebuf[prev+((i-prev)/2)] & gc_status_bit[k];  //this code would take data at the mid-number-sample, but we should take data at the mid-time-sample
+                
+                if(sampletimestamp[risingIndex] - sampletimestamp[prev] < sampletimestamp[i] - sampletimestamp[risingIndex])
+                    data[j] |= gc_status_bit[k];     //time betweek fall and rise was smaller then rise->fall, so this bit is a '1'
+                
 				j++;
 				prev = i;
 			}
@@ -364,7 +379,7 @@ static void gc_n64_process_packet(struct gc *gc)
         if ((s & ~(data[8] | data[9] | ~data[32])
 #ifdef PRUNE_N64_STATUS_RESPONSE
                & ~(data[5] & data[7] &
-                   ~(data[0] | data[1] | data[2] | data[3] | data[4] | data[6] | data[8] | data[9] | data[10] | data[11] | data[12] | data[13] | data[14] | data[15] | data[16] | data[17] | data[18] | data[18]
+                   ~(data[0] | data[1] | data[2] | data[3] | data[4] | data[6] | data[8] | data[9] | data[10] | data[11] | data[12] | data[13] | data[14] | data[15] | data[16] | data[17] | data[18]
                              | data[19] | data[20] | data[21] | data[22] | data[23] | data[24] | data[25] | data[26] | data[27] | data[28] | data[29])
                     )
 #endif
