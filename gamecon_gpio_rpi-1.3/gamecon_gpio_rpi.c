@@ -58,6 +58,7 @@ MODULE_LICENSE("GPL");
 #define GPIO_STATUS (*(gpio+13))
 
 static volatile unsigned *gpio;
+uint32_t invalidPacketCount = 0;
 
 /*
  from http://git.drogon.net/?p=wiringPi;a=blob_plain;f=wiringPi/wiringPi.c
@@ -278,11 +279,12 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 {
     int i,j,k;
     int risingIndex = 0;
-    unsigned prev, mindiff=1000, maxdiff=0;
+    unsigned prev;
+    //    unsigned mindiff=1000, maxdiff=0;
     unsigned long flags, lowgap, highgap;
     static unsigned char samplebuf[6500]; // =max(GC_N64_BUFSIZE, GC_GCUBE_BUFSIZE)
-//    static unsigned long sampletimestamp[6500];
-    ktime_t sampletimestamp[6500];
+    //    static unsigned long sampletimestamp[6500];
+    static ktime_t sampletimestamp[6500];
     uint8_t validpacket;
     
     /* disable interrupts */
@@ -344,33 +346,48 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                 //data[j] |= samplebuf[prev+((i-prev)/2)] & gc_status_bit[k];  //this code would take data at the mid-number-sample, but we should take data at the mid-time-sample
                 
                 lowgap = ktime_to_ns(ktime_sub(sampletimestamp[risingIndex], sampletimestamp[prev]));
-                highgap = ktime_to_ns(ktime_sub(sampletimestamp[i], sampletimestamp[risingIndex]);
-
+                highgap = ktime_to_ns(ktime_sub(sampletimestamp[i], sampletimestamp[risingIndex]));
                 
-#define GAP_SMALL_MIN 600
+                
+#define GAP_SMALL_MIN 500
 #define GAP_SMALL_MAX 1400
-#define GAP_LARGE_MIN 2600
-#define GAP_LARGE_MAX 3300
+#define GAP_LARGE_MIN 2500
+#define GAP_LARGE_MAX 3400
                 
                 if(lowgap < highgap)  //the high "gap" is the larger gap
                 {
+                    
                     data[j] |= gc_status_bit[k];     //time betweek fall and rise was smaller then rise->fall, so this bit is a '1'
-                    /*
                     if(lowgap < GAP_SMALL_MIN || lowgap > GAP_SMALL_MAX || highgap < GAP_LARGE_MIN || highgap > GAP_LARGE_MAX)
+                    {
                         validpacket = 0;
-                     */
-                    //if((highgap - lowgap) < 1000)
-                    //  printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu\n", j, prev, risingIndex, i, lowgap, highgap);
+                        invalidPacketCount++;
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                    }
+                    else
+                    {
+                        if(j<16)
+                            printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (1 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
+                    }
                 }
-/*                else
+                else
                 {
+                    
                     //data[j] &= ~gc_status_bit[k];     //0
                     if(highgap < GAP_SMALL_MIN || highgap > GAP_SMALL_MAX || lowgap < GAP_LARGE_MIN || lowgap > GAP_LARGE_MAX)
+                    {
                         validpacket = 0;
-                    //if((lowgap - highgap) < 1000)
-                    //  printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu\n", j, prev, risingIndex, i, lowgap, highgap);
+                        invalidPacketCount++;
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                    }
+                    else
+                    {
+                        if(j>=16 && j!=31)
+                            printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (0 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        
+                    }
                 }
-  */              
+                
                 j++;
                 prev = i;
                 risingIndex = 0;
@@ -1345,7 +1362,7 @@ static int __init gc_init(void)
    	if ((gpio = ioremap(GPIO_BASE, 0xB0)) == NULL) {
    	   	pr_err("io remap failed\n");
    	   	return -EBUSY;
-   	}   	
+   	}
     
     if (gc_cfg.nargs < 1) {
         pr_err("at least one device must be specified\n");
@@ -1365,6 +1382,8 @@ static void __exit gc_exit(void)
         gc_remove(gc_base);
     
     iounmap(gpio);
+    
+    printk("gamecon: exiting (%d invalid packets encountered)\n", invalidPacketCount);
 }
 
 module_init(gc_init);
