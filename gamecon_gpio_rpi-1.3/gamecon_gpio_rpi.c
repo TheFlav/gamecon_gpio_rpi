@@ -139,7 +139,8 @@ enum gc_type {
     GC_MAX
 };
 
-#define GC_REFRESH_TIME	HZ/100
+#define GC_REFRESHES_PER_SECOND 100
+#define GC_REFRESH_TIME	HZ/GC_REFRESHES_PER_SECOND
 
 struct gc_pad {
     struct input_dev *dev;
@@ -1035,6 +1036,8 @@ static void gc_psx_process_packet(struct gc *gc)
 
 static void gc_timer(unsigned long private)
 {
+    uint32_t start_jiffies = jiffies;
+    //ktime_t start_time = ktime_get();
     struct gc *gc = (void *) private;
     
     /*
@@ -1065,7 +1068,13 @@ static void gc_timer(unsigned long private)
     if (gc->pad_count[GC_PSX] || gc->pad_count[GC_DDR])
         gc_psx_process_packet(gc);
     
-    mod_timer(&gc->timer, jiffies + GC_REFRESH_TIME);
+    //uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), start_time);
+
+
+    if(start_jiffies + GC_REFRESH_TIME > jiffies)
+        mod_timer(&gc->timer, start_jiffies + GC_REFRESH_TIME);
+    else
+        mod_timer(&gc->timer, jiffies + 2);
 }
 
 static int gc_open(struct input_dev *dev)
