@@ -343,9 +343,10 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                 /* data is taken between 2 falling edges */
                 //data[j] |= samplebuf[prev+((i-prev)/2)] & gc_status_bit[k];  //this code would take data at the mid-number-sample, but we should take data at the mid-time-sample
                 
-                lowgap = ktime_to_ns(sampletimestamp[risingIndex]) - ktime_to_ns(sampletimestamp[prev]);
-                highgap = ktime_to_ns(sampletimestamp[i]) - ktime_to_ns(sampletimestamp[risingIndex]);
+                lowgap = ktime_to_ns(ktime_sub(sampletimestamp[risingIndex], sampletimestamp[prev]));
+                highgap = ktime_to_ns(ktime_sub(sampletimestamp[i], sampletimestamp[risingIndex]);
 
+                
 #define GAP_SMALL_MIN 600
 #define GAP_SMALL_MAX 1400
 #define GAP_LARGE_MIN 2600
@@ -354,12 +355,14 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                 if(lowgap < highgap)  //the high "gap" is the larger gap
                 {
                     data[j] |= gc_status_bit[k];     //time betweek fall and rise was smaller then rise->fall, so this bit is a '1'
+                    /*
                     if(lowgap < GAP_SMALL_MIN || lowgap > GAP_SMALL_MAX || highgap < GAP_LARGE_MIN || highgap > GAP_LARGE_MAX)
                         validpacket = 0;
+                     */
                     //if((highgap - lowgap) < 1000)
                     //  printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu\n", j, prev, risingIndex, i, lowgap, highgap);
                 }
-                else
+/*                else
                 {
                     //data[j] &= ~gc_status_bit[k];     //0
                     if(highgap < GAP_SMALL_MIN || highgap > GAP_SMALL_MAX || lowgap < GAP_LARGE_MIN || lowgap > GAP_LARGE_MAX)
@@ -367,7 +370,7 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     //if((lowgap - highgap) < 1000)
                     //  printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu\n", j, prev, risingIndex, i, lowgap, highgap);
                 }
-                
+  */              
                 j++;
                 prev = i;
                 risingIndex = 0;
