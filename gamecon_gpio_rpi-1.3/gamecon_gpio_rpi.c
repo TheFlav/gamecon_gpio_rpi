@@ -59,6 +59,7 @@ MODULE_LICENSE("GPL");
 
 static volatile unsigned *gpio;
 uint32_t invalidPacketCount = 0;
+ktime_t init_timestamp;
 
 /*
  from http://git.drogon.net/?p=wiringPi;a=blob_plain;f=wiringPi/wiringPi.c
@@ -280,10 +281,11 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
     int i,j,k;
     int risingIndex = 0;
     unsigned prev;
-    //    unsigned mindiff=1000, maxdiff=0;
-    unsigned long flags, lowgap, highgap;
+//    unsigned mindiff=1000, maxdiff=0;
+    unsigned long flags;
+    uint16_t lowgap, highgap, entiregap;
     static unsigned char samplebuf[6500]; // =max(GC_N64_BUFSIZE, GC_GCUBE_BUFSIZE)
-    //    static unsigned long sampletimestamp[6500];
+//    static unsigned long sampletimestamp[6500];
     static ktime_t sampletimestamp[6500];
     uint8_t validpacket;
     
@@ -347,14 +349,29 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                 
                 lowgap = ktime_to_ns(ktime_sub(sampletimestamp[risingIndex], sampletimestamp[prev]));
                 highgap = ktime_to_ns(ktime_sub(sampletimestamp[i], sampletimestamp[risingIndex]));
+                entiregap = lowgap + highgap;
+
                 
+//typical     lowgap=3021 highgap=990
+/*#define GAP_SMALL_MIN 100
+#define GAP_SMALL_MAX 1700
+#define GAP_LARGE_MIN 2200
+#define GAP_LARGE_MAX 3900
+#define GAP_ENTIRE_MAX 4800*/
                 
 #define GAP_SMALL_MIN 500
-#define GAP_SMALL_MAX 1400
+#define GAP_SMALL_MAX 1500
 #define GAP_LARGE_MIN 2500
-#define GAP_LARGE_MAX 3400
+#define GAP_LARGE_MAX 3500
+#define GAP_ENTIRE_MAX 4800                
                 
-                if(lowgap < highgap)  //the high "gap" is the larger gap
+                if(entiregap > GAP_ENTIRE_MAX)
+                {
+                    validpacket = 0;
+                    invalidPacketCount++;
+                    //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                }
+                else if(lowgap < highgap)  //the high "gap" is the larger gap
                 {
                     
                     data[j] |= gc_status_bit[k];     //time betweek fall and rise was smaller then rise->fall, so this bit is a '1'
@@ -362,13 +379,13 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
-                    else
+/*                    else
                     {
                         if(j<16)
                             printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (1 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
-                    }
+                    }*/
                 }
                 else
                 {
@@ -378,16 +395,17 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
-                    else
+/*                    else
                     {
                         if(j>=16 && j!=31)
                             printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (0 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
                         
                     }
+ */
                 }
-                
+
                 j++;
                 prev = i;
                 risingIndex = 0;
@@ -1362,7 +1380,7 @@ static int __init gc_init(void)
    	if ((gpio = ioremap(GPIO_BASE, 0xB0)) == NULL) {
    	   	pr_err("io remap failed\n");
    	   	return -EBUSY;
-   	}
+   	}   	
     
     if (gc_cfg.nargs < 1) {
         pr_err("at least one device must be specified\n");
@@ -1373,17 +1391,25 @@ static int __init gc_init(void)
             return -ENODEV;
     }
     
+    init_timestamp = ktime_get();
+    
     return 0;
 }
 
 static void __exit gc_exit(void)
 {
+    uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), init_timestamp);
+    uint32_t invalid_per_s = (invalidPacketCount+1) * 1000 / ms_elapsed;
+    
+
+    
+    printk("gamecon: exiting (%lu invalid packets in %lums [~%lu bad/s])\n", invalidPacketCount, ms_elapsed, invalid_per_s);
+
     if (gc_base)
         gc_remove(gc_base);
     
     iounmap(gpio);
     
-    printk("gamecon: exiting (%d invalid packets encountered)\n", invalidPacketCount);
 }
 
 module_init(gc_init);
