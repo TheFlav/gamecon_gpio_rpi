@@ -59,6 +59,7 @@ MODULE_LICENSE("GPL");
 
 static volatile unsigned *gpio;
 uint32_t invalidPacketCount = 0;
+uint32_t totalPacketCount = 0;
 ktime_t init_timestamp;
 
 /*
@@ -140,7 +141,7 @@ enum gc_type {
 };
 
 #define GC_REFRESHES_PER_SECOND 100
-#define GC_REFRESH_TIME	HZ/GC_REFRESHES_PER_SECOND
+#define GC_REFRESH_TIME	(HZ / GC_REFRESHES_PER_SECOND)
 
 struct gc_pad {
     struct input_dev *dev;
@@ -289,7 +290,7 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
     //    static unsigned long sampletimestamp[6500];
     static ktime_t sampletimestamp[6500];
     uint8_t validpacket;
-    uint8_t numTransitions = 0;
+//    uint8_t numTransitions = 0;
     
     /* disable interrupts */
     local_irq_save(flags);
@@ -300,9 +301,10 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
     samplebuf[0] = GPIO_STATUS & ningpio->valid_bits;
     sampletimestamp[0] = ktime_get(); //local_clock() may be faster
     i=1;
+    j=0;
     
     //use j like a max number of times to poll
-    while(i < 32*2 && j < ningpio->response_bufsize)
+    while(i < 67 && j < ningpio->response_bufsize)   //this i<68 only works for a single controller!!!!
     {
         samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
         if(samplebuf[i] != samplebuf[i-1])
@@ -313,19 +315,21 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
         }
         j++;
     }
-    /*
-     for (i = 1; i < ningpio->response_bufsize; i++)
-     {
-     samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
-     sampletimestamp[i] = ktime_get(); //local_clock() may be faster
-     
-     if(samplebuf[i]
-     }*/
     
     /* enable interrupts when done */
     local_irq_restore(flags);
     
     memset(data, 0x00, ningpio->response_len);
+    if(j >= ningpio->response_bufsize)
+    {
+        //printk("gamecon: i=%d j=%d (invalid, returning)\n", i, j);
+        invalidPacketCount++;
+        return;
+    }
+    
+    
+    
+    //printk("gamecon: i=%d j=%d\n", i, j);
     
     /* extract correct bit sequence (for each pad) from sampled data */
     for (k = 0; k < GC_MAX_DEVICES; k++)
@@ -400,7 +404,7 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
                     /*                    else
                      {
@@ -416,7 +420,7 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
                     /*                    else
                      {
@@ -1057,6 +1061,7 @@ static void gc_psx_process_packet(struct gc *gc)
 static void gc_timer(unsigned long private)
 {
     uint32_t start_jiffies = jiffies;
+    uint32_t start_invalidPacketCount = invalidPacketCount;
     //ktime_t start_time = ktime_get();
     struct gc *gc = (void *) private;
     
@@ -1064,8 +1069,12 @@ static void gc_timer(unsigned long private)
      * N64 & Gamecube pads
      */
     
+    totalPacketCount++;
+    
     if (gc->pad_count[GC_N64])
         gc_n64_process_packet(gc);
+    
+#if 0
     
     if (gc->pad_count[GC_GCUBE])
         gc_gcube_process_packet(gc);
@@ -1087,14 +1096,18 @@ static void gc_timer(unsigned long private)
     
     if (gc->pad_count[GC_PSX] || gc->pad_count[GC_DDR])
         gc_psx_process_packet(gc);
+#endif
     
     //uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), start_time);
     
-    
-    if(start_jiffies + GC_REFRESH_TIME > jiffies)
+    if(invalidPacketCount != start_invalidPacketCount)
+        mod_timer(&gc->timer, jiffies); //do another ASAP
+    else if(start_jiffies + GC_REFRESH_TIME > jiffies)
         mod_timer(&gc->timer, start_jiffies + GC_REFRESH_TIME);
     else
-        mod_timer(&gc->timer, jiffies + 2);
+        mod_timer(&gc->timer, jiffies); //do another ASAP
+    
+    //mod_timer(&gc->timer, jiffies + GC_REFRESH_TIME);
 }
 
 static int gc_open(struct input_dev *dev)
@@ -1429,10 +1442,11 @@ static void __exit gc_exit(void)
 {
     uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), init_timestamp);
     uint32_t invalid_per_s = (invalidPacketCount+1) * 1000 / ms_elapsed;
+    uint32_t tot_per_s = (totalPacketCount+1) * 1000 / ms_elapsed;
     
     
     
-    printk("gamecon: exiting (%lu invalid packets in %lums [~%lu bad/s])\n", invalidPacketCount, ms_elapsed, invalid_per_s);
+    printk("gamecon: exiting (%lu/%lu invalid/total packets in %lums [~%u bad/s, %u upd/s])\n", invalidPacketCount, totalPacketCount, ms_elapsed, invalid_per_s, tot_per_s);
     
     if (gc_base)
         gc_remove(gc_base);
