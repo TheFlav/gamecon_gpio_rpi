@@ -282,13 +282,14 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
     int i,j,k;
     int risingIndex = 0;
     unsigned prev;
-//    unsigned mindiff=1000, maxdiff=0;
+    //    unsigned mindiff=1000, maxdiff=0;
     unsigned long flags;
     uint16_t lowgap, highgap, entiregap;
     static unsigned char samplebuf[6500]; // =max(GC_N64_BUFSIZE, GC_GCUBE_BUFSIZE)
-//    static unsigned long sampletimestamp[6500];
+    //    static unsigned long sampletimestamp[6500];
     static ktime_t sampletimestamp[6500];
     uint8_t validpacket;
+    uint8_t numTransitions = 0;
     
     /* disable interrupts */
     local_irq_save(flags);
@@ -296,11 +297,30 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
     gc_n64_send_command(ningpio);
     
     /* start sampling data */
-    for (i = 0; i < ningpio->response_bufsize; i++)
+    samplebuf[0] = GPIO_STATUS & ningpio->valid_bits;
+    sampletimestamp[0] = ktime_get(); //local_clock() may be faster
+    i=1;
+    
+    //use j like a max number of times to poll
+    while(i < 32*2 && j < ningpio->response_bufsize)
     {
         samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
-        sampletimestamp[i] = ktime_get(); //local_clock() may be faster
+        if(samplebuf[i] != samplebuf[i-1])
+        {
+            //store only rising and falling edges
+            sampletimestamp[i] = ktime_get();
+            i++;
+        }
+        j++;
     }
+    /*
+     for (i = 1; i < ningpio->response_bufsize; i++)
+     {
+     samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
+     sampletimestamp[i] = ktime_get(); //local_clock() may be faster
+     
+     if(samplebuf[i]
+     }*/
     
     /* enable interrupts when done */
     local_irq_restore(flags);
@@ -351,20 +371,20 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                 lowgap = ktime_to_ns(ktime_sub(sampletimestamp[risingIndex], sampletimestamp[prev]));
                 highgap = ktime_to_ns(ktime_sub(sampletimestamp[i], sampletimestamp[risingIndex]));
                 entiregap = lowgap + highgap;
-
                 
-//typical     lowgap=3021 highgap=990
-/*#define GAP_SMALL_MIN 100
-#define GAP_SMALL_MAX 1700
-#define GAP_LARGE_MIN 2200
-#define GAP_LARGE_MAX 3900
-#define GAP_ENTIRE_MAX 4800*/
+                
+                //typical     lowgap=3021 highgap=990
+                /*#define GAP_SMALL_MIN 100
+                 #define GAP_SMALL_MAX 1700
+                 #define GAP_LARGE_MIN 2200
+                 #define GAP_LARGE_MAX 3900
+                 #define GAP_ENTIRE_MAX 4800*/
                 
 #define GAP_SMALL_MIN 500
 #define GAP_SMALL_MAX 1500
 #define GAP_LARGE_MIN 2500
 #define GAP_LARGE_MAX 3500
-#define GAP_ENTIRE_MAX 4800                
+#define GAP_ENTIRE_MAX 4800
                 
                 if(entiregap > GAP_ENTIRE_MAX)
                 {
@@ -380,13 +400,13 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
-/*                    else
-                    {
-                        if(j<16)
-                            printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (1 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
-                    }*/
+                    /*                    else
+                     {
+                     if(j<16)
+                     printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (1 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
+                     }*/
                 }
                 else
                 {
@@ -396,17 +416,17 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
                     {
                         validpacket = 0;
                         invalidPacketCount++;
-                        //printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
+                        printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%u highgap=%u (INVALID PACKET)\n", j, prev, risingIndex, i, lowgap, highgap);
                     }
-/*                    else
-                    {
-                        if(j>=16 && j!=31)
-                            printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (0 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
-                        
-                    }
- */
+                    /*                    else
+                     {
+                     if(j>=16 && j!=31)
+                     printk("gamecon: bit=%d p=%d r=%d i=%d lowgap=%lu highgap=%lu (0 bit)\n", j, prev, risingIndex, i, lowgap, highgap);
+                     
+                     }
+                     */
                 }
-
+                
                 j++;
                 prev = i;
                 risingIndex = 0;
@@ -1069,8 +1089,8 @@ static void gc_timer(unsigned long private)
         gc_psx_process_packet(gc);
     
     //uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), start_time);
-
-
+    
+    
     if(start_jiffies + GC_REFRESH_TIME > jiffies)
         mod_timer(&gc->timer, start_jiffies + GC_REFRESH_TIME);
     else
@@ -1389,7 +1409,7 @@ static int __init gc_init(void)
    	if ((gpio = ioremap(GPIO_BASE, 0xB0)) == NULL) {
    	   	pr_err("io remap failed\n");
    	   	return -EBUSY;
-   	}   	
+   	}
     
     if (gc_cfg.nargs < 1) {
         pr_err("at least one device must be specified\n");
@@ -1410,10 +1430,10 @@ static void __exit gc_exit(void)
     uint32_t ms_elapsed = ktime_ms_delta(ktime_get(), init_timestamp);
     uint32_t invalid_per_s = (invalidPacketCount+1) * 1000 / ms_elapsed;
     
-
+    
     
     printk("gamecon: exiting (%lu invalid packets in %lums [~%lu bad/s])\n", invalidPacketCount, ms_elapsed, invalid_per_s);
-
+    
     if (gc_base)
         gc_remove(gc_base);
     
